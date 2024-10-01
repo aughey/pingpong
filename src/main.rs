@@ -3,6 +3,7 @@ use std::{net::{SocketAddr, UdpSocket}, time::Instant};
 use anyhow::{bail, Result};
 use clap::Parser;
 
+
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
 struct Cli {
@@ -19,17 +20,41 @@ struct Cli {
     data_length: usize
 }
 
+trait SendRecv {
+    fn send(&self, data: &[u8]) -> Result<()>;
+    fn recv(&self, data: &mut [u8]) -> Result<usize>;
+}
+impl SendRecv for (UdpSocket,SocketAddr) {
+    fn send(&self, data: &[u8]) -> Result<()> {
+        let (socket, addr) = self;
+        socket.send_to(data, addr)?;
+        Ok(())
+    }
+    fn recv(&self, data: &mut [u8]) -> Result<usize> {
+        let (socket, _addr) = self;
+        let (size,_sender) = socket.recv_from(data)?;
+        Ok(size)
+    }
+}
+
 fn main() -> Result<()> {
+    udp_main()
+}
+
+fn udp_main() -> Result<()> {
     let cli = Cli::parse();
     let udpsocket = UdpSocket::bind(format!("0.0.0.0:{port}", port = cli.listen_port))?;
 
     let send_addr = format!("{address}:{port}", address = cli.send_address, port = cli.send_port);
     // Conver this into an addr that is sendable with udp
     let send_addr : SocketAddr = send_addr.parse()?;
-
     let mut data = vec![0; cli.data_length];
-    if Some(true) == cli.send_first {
-        udpsocket.send_to(&data, send_addr)?;
+    send_recv(data.as_mut_slice(),&(udpsocket,send_addr),cli.send_first.unwrap_or(false))
+}
+
+fn send_recv(data: &mut [u8], send_recv: &impl SendRecv, send_first: bool) -> Result<()> {
+    if  send_first {
+        send_recv.send(&data)?;
     }
 
     let mut last_print = Instant::now();
@@ -41,12 +66,12 @@ fn main() -> Result<()> {
 
     loop {
         // Receive data and send it back ast fast as we can
-        let (size,_sender) = udpsocket.recv_from(data.as_mut_slice())?;
+        let size = send_recv.recv(data)?;
         let this_recv = Instant::now();
         if size != data.len() {
             bail!("Received data of unexpected size: {}", size);
         }
-        udpsocket.send_to(&data, send_addr)?;
+        send_recv.send(data)?;
 
         // Do housekeeping tasks to update our statistics
         count = count.checked_add(1).ok_or_else(|| anyhow::anyhow!("Overflow"))?;
